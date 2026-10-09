@@ -17723,33 +17723,24 @@ impl Workspace {
         match pane_group_handle.as_ref(ctx).active_session_view(ctx) {
             Some(terminal_handle) => {
                 #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
-                let (
-                    session,
-                    pwd_location,
-                    path_if_local,
-                    is_local,
-                    is_wsl_session,
-                    session_id,
-                    has_pending_ssh,
-                ) = terminal_handle.read(ctx, |terminal, ctx| {
-                    let active_session_id = terminal.active_block_session_id();
-                    let session = active_session_id
-                        .and_then(|id| terminal.sessions_model().as_ref(ctx).get(id));
-                    let pwd_location = terminal.pwd_as_local_or_remote(ctx);
-                    let path_if_local = terminal.active_session_path_if_local(ctx);
-                    let is_local = terminal.active_session_is_local(ctx);
-                    let is_wsl_session = session.as_ref().map(|s| s.is_wsl()).unwrap_or(false);
-                    let has_pending_ssh = terminal.has_pending_ssh_command();
-                    (
-                        session,
-                        pwd_location,
-                        path_if_local,
-                        is_local,
-                        is_wsl_session,
-                        active_session_id,
-                        has_pending_ssh,
-                    )
-                });
+                let (session, pwd_location, path_if_local, is_local, session_id, has_pending_ssh) =
+                    terminal_handle.read(ctx, |terminal, ctx| {
+                        let active_session_id = terminal.active_block_session_id();
+                        let session = active_session_id
+                            .and_then(|id| terminal.sessions_model().as_ref(ctx).get(id));
+                        let pwd_location = terminal.pwd_as_local_or_remote(ctx);
+                        let path_if_local = terminal.active_session_path_if_local(ctx);
+                        let is_local = terminal.active_session_is_local(ctx);
+                        let has_pending_ssh = terminal.has_pending_ssh_command();
+                        (
+                            session,
+                            pwd_location,
+                            path_if_local,
+                            is_local,
+                            active_session_id,
+                            has_pending_ssh,
+                        )
+                    });
 
                 let window_id = ctx.window_id();
                 let working_directory_clone = path_if_local.clone();
@@ -17770,7 +17761,6 @@ impl Workspace {
                 });
 
                 let is_remote = matches!(is_local, Some(false));
-                let is_unsupported_session = is_wsl_session;
 
                 // Check whether this remote session has an active remote server
                 // connection (or is in the process of connecting). This is only
@@ -17785,7 +17775,6 @@ impl Workspace {
                 let enablement = CodingPanelEnablementState::from_session_env(
                     file_tree_and_global_search_are_enabled,
                     is_remote,
-                    is_unsupported_session,
                     has_remote_server,
                 );
 
@@ -17809,7 +17798,7 @@ impl Workspace {
                 #[cfg(feature = "local_fs")]
                 {
                     self.right_panel_view.update(ctx, |right_panel, ctx| {
-                        right_panel.update_session_env(is_remote, is_wsl_session, ctx);
+                        right_panel.update_session_env(is_remote, ctx);
                     });
 
                     // Code review panel setup is handled by the RepositoriesChanged
@@ -17823,7 +17812,6 @@ impl Workspace {
                     file_tree_and_global_search_are_enabled,
                     false,
                     false,
-                    false,
                 );
 
                 self.left_panel_view.update(ctx, |left_panel, ctx| {
@@ -17833,7 +17821,7 @@ impl Workspace {
                 #[cfg(feature = "local_fs")]
                 {
                     self.right_panel_view.update(ctx, |right_panel, ctx| {
-                        right_panel.update_session_env(false, false, ctx);
+                        right_panel.update_session_env(false, ctx);
                     });
                 }
             }
