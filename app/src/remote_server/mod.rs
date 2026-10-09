@@ -10,6 +10,7 @@ use warpui::SingletonEntity as _;
 
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
+use crate::features::FeatureFlag;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
 
@@ -35,6 +36,19 @@ pub mod server_model;
 pub mod ssh_transport;
 #[cfg(unix)]
 pub mod unix;
+#[cfg(not(target_family = "wasm"))]
+pub mod wsl_transport;
+
+/// Whether any session can be backed by a remote server: an SSH session, or on Windows a WSL
+/// session.
+pub fn is_remote_server_enabled() -> bool {
+    FeatureFlag::SshRemoteServer.is_enabled() || is_wsl_remote_server_enabled()
+}
+
+/// Whether WSL sessions connect to a remote server running inside their distribution.
+pub fn is_wsl_remote_server_enabled() -> bool {
+    cfg!(windows) && FeatureFlag::WslRemoteServer.is_enabled()
+}
 
 #[cfg(not(target_family = "wasm"))]
 fn current_codebase_index_limits(

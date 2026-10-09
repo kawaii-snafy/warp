@@ -1,3 +1,6 @@
 *.pdb filter=lfs diff=lfs merge=lfs -text
 crates/input_classifier/models/** filter=lfs diff=lfs merge=lfs -text
 crates/input_classifier/models/**/*tokenizer.json -filter -diff -merge text linguist-generated=true
+# Shell scripts run on Unix, including ones embedded into the Windows build with include_str!
+# and run inside WSL or over SSH, so they must keep LF endings regardless of core.autocrlf.
+*.sh text eol=lf

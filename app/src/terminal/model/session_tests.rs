@@ -129,6 +129,30 @@ fn test_malicious_histfile_path_does_not_execute_injected_commands() {
     });
 }
 
+#[test]
+fn set_remote_host_id_tracks_the_wsl_server_for_local_wsl_sessions() {
+    let mut session_info = SessionInfo::new_for_test();
+    session_info.wsl_name = Some("Ubuntu".to_string());
+    let session = Session::new(session_info, Arc::new(TestCommandExecutor::default()));
+    let host_id = warp_core::HostId::new("wsl-host".to_string());
+
+    session.set_remote_host_id(Some(host_id.clone()));
+    assert_eq!(session.wsl_remote_host_id(), Some(host_id));
+    assert!(session.is_local());
+
+    session.set_remote_host_id(None);
+    assert_eq!(session.wsl_remote_host_id(), None);
+}
+
+#[test]
+fn set_remote_host_id_ignores_local_non_wsl_sessions() {
+    let session = Session::test();
+
+    session.set_remote_host_id(Some(warp_core::HostId::new("host".to_string())));
+
+    assert_eq!(session.wsl_remote_host_id(), None);
+}
+
 #[cfg(not(windows))]
 #[test]
 fn can_resolve_cwd_to_native_path_accepts_posix_path() {

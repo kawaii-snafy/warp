@@ -84,6 +84,14 @@ impl ModelEventDispatcher {
         )
     }
 
+    /// Whether sessions on this terminal may be backed by a remote server.
+    pub(crate) fn supports_remote_server(&self) -> bool {
+        matches!(
+            self.ssh_remote_server_support,
+            SshRemoteServerSupport::Enabled
+        )
+    }
+
     /// Returns the active session to which the PTY is currently attached.
     ///
     /// The active session is the session corresponding to the session ID included in the most

@@ -449,7 +449,7 @@ impl<S> TerminalManager<S> {
 
         // Initialize the RemoteServerController.
         let remote_server_controller =
-            init_remote_server_controller(&pty_controller, &model_events, ctx);
+            init_remote_server_controller(&pty_controller, &model_events, &sessions, ctx);
         let size_info = model.lock().block_list().size().to_owned();
         let TerminalSurfaceResult { surface, post_wire } = create_surface(
             TerminalSurfaceInit {

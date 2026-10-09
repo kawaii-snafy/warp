@@ -33,9 +33,10 @@ pub(super) fn should_try_install(error: &Error) -> bool {
 pub(super) async fn install(socket_path: &Path) -> Result<(), Error> {
     let platform = super::super::detect_remote_platform(socket_path).await?;
 
-    let client_tarball_path = cached_remote_server_tarball(&platform)
-        .await
-        .map_err(Error::Other)?;
+    let client_tarball_path =
+        cached_remote_server_tarball(&platform, remote_server::setup::download_channel())
+            .await
+            .map_err(Error::Other)?;
     let timeout = remote_server::setup::SCP_INSTALL_TIMEOUT;
     let install_dir = remote_server::setup::remote_server_dir();
     let remote_tarball_name = format!("oz-upload-{}.tar.gz", uuid::Uuid::new_v4());
@@ -119,11 +120,17 @@ async fn is_valid_cached_tarball(path: &Path) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
 }
 
-/// Returns a local tarball for the remote platform.
+/// Returns a local tarball for the remote platform, downloading the artifact published on
+/// `download_channel` (one of [`remote_server::setup::download_channels`]) when none is cached.
 ///
 /// Reuses an existing cached tarball when available; otherwise downloads the
-/// tarball into the cache and returns the newly cached path.
-async fn cached_remote_server_tarball(platform: &RemotePlatform) -> anyhow::Result<PathBuf> {
+/// tarball into the cache and returns the newly cached path. The cache is keyed by artifact
+/// version, not channel: only unpinned clients have several candidate channels, and they accept
+/// any server version.
+pub(crate) async fn cached_remote_server_tarball(
+    platform: &RemotePlatform,
+    download_channel: &str,
+) -> anyhow::Result<PathBuf> {
     let cache_path = remote_server_tarball_cache_path(platform);
     if is_valid_cached_tarball(&cache_path).await {
         log::info!(
@@ -137,7 +144,7 @@ async fn cached_remote_server_tarball(platform: &RemotePlatform) -> anyhow::Resu
         let _ = async_fs::remove_file(&cache_path).await;
     }
 
-    let url = remote_server::setup::download_tarball_url(platform);
+    let url = remote_server::setup::download_tarball_url_from_channel(platform, download_channel);
     log::info!(
         "Downloading remote-server tarball from {url} into cache at {}",
         cache_path.display()

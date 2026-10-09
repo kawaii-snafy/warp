@@ -267,7 +267,6 @@ const COMMENT_EDITOR_SCROLL_BUFFER: f32 = 200.0;
 pub const CODE_REVIEW_TOOLTIP_TEXT: &str = "View changes";
 const REMOTE_TEXT: &str = "Diffs only work for local workspaces.";
 const DISABLED_TEXT: &str = "Diffs only work for git repositories.";
-const WSL_TEXT: &str = "Diffs don't currently work in WSL.";
 
 pub fn get_discard_button_disabled_tooltip(git_operation_blocked: bool) -> String {
     if git_operation_blocked {
@@ -2876,19 +2875,13 @@ impl CodeReviewView {
     fn session_env(&self, app: &AppContext) -> Option<GitSessionState> {
         let terminal_view = self.focused_terminal(app)?;
         terminal_view.read(app, |terminal, ctx| {
-            let session = terminal
-                .active_block_session_id()
-                .and_then(|id| terminal.sessions_model().as_ref(ctx).get(id));
             let is_local = terminal.active_session_is_local(ctx);
             let is_remote = matches!(is_local, Some(false));
-            let is_wsl = session.as_ref().map(|s| s.is_wsl()).unwrap_or(false);
 
             let enablement = if is_remote {
                 CodingPanelEnablementState::RemoteSession {
                     has_remote_server: false,
                 }
-            } else if is_wsl {
-                CodingPanelEnablementState::UnsupportedSession
             } else {
                 CodingPanelEnablementState::Enabled
             };
@@ -2903,7 +2896,7 @@ impl CodeReviewView {
         _app: &AppContext,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        Self::render_wsl_state(appearance, None)
+        Self::render_remote_state(appearance, None)
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -2922,9 +2915,6 @@ impl CodeReviewView {
                 // in a remote session.
                 Self::render_remote_state(appearance, None)
             }
-            Some(GitSessionState {
-                enablement: CodingPanelEnablementState::UnsupportedSession,
-            }) => Self::render_wsl_state(appearance, open_repo_button()),
             None
             | Some(GitSessionState {
                 enablement:
@@ -3989,13 +3979,6 @@ impl CodeReviewView {
         open_repo_button: Option<Box<dyn Element>>,
     ) -> Box<dyn Element> {
         Self::render_no_repo_found_state(appearance, REMOTE_TEXT, open_repo_button)
-    }
-
-    pub fn render_wsl_state(
-        appearance: &Appearance,
-        open_repo_button: Option<Box<dyn Element>>,
-    ) -> Box<dyn Element> {
-        Self::render_no_repo_found_state(appearance, WSL_TEXT, open_repo_button)
     }
 
     pub fn render_not_repo_state(

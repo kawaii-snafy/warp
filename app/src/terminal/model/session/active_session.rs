@@ -100,10 +100,20 @@ impl ActiveSession {
     /// Returns a session-aware path for `path`.
     ///
     /// Local session paths are canonicalized to match git-detected repository paths on
-    /// case-insensitive filesystems. Remote session paths are standardized and tagged with
-    /// the connected host ID.
+    /// case-insensitive filesystems. Remote session paths, and paths in a local WSL session
+    /// whose distribution runs a connected remote server, are standardized and tagged with the
+    /// connected host ID.
     pub fn location_for_path(&self, path: &str, app: &AppContext) -> Option<LocalOrRemotePath> {
-        match self.session_type(app) {
+        let session = self.session(app);
+        if let Some(host_id) = session
+            .as_ref()
+            .and_then(|session| session.wsl_remote_host_id())
+        {
+            return StandardizedPath::try_new(path)
+                .ok()
+                .map(|path| LocalOrRemotePath::Remote(RemotePath::new(host_id, path)));
+        }
+        match session.map(|session| session.session_type()) {
             Some(SessionType::WarpifiedRemote {
                 host_id: Some(host_id),
             }) => StandardizedPath::try_new(path)

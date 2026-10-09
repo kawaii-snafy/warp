@@ -191,7 +191,6 @@ struct CodeReviewState {
 #[cfg(feature = "local_fs")]
 struct CodeReviewSessionEnv {
     is_remote: bool,
-    is_wsl: bool,
 }
 
 /// Resolve the repo-switcher dropdown's text color from the current theme.
@@ -541,13 +540,8 @@ impl RightPanelView {
     }
 
     #[cfg(feature = "local_fs")]
-    pub fn update_session_env(
-        &mut self,
-        is_remote: bool,
-        is_wsl: bool,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.code_review_session_env = Some(CodeReviewSessionEnv { is_remote, is_wsl });
+    pub fn update_session_env(&mut self, is_remote: bool, ctx: &mut ViewContext<Self>) {
+        self.code_review_session_env = Some(CodeReviewSessionEnv { is_remote });
         ctx.notify();
     }
 
@@ -890,8 +884,6 @@ impl RightPanelView {
                         // button navigates to a local folder, which is not meaningful
                         // in a remote session.
                         CodeReviewView::render_remote_state(appearance, None)
-                    } else if env.is_wsl {
-                        CodeReviewView::render_wsl_state(appearance, open_repo_button())
                     } else {
                         CodeReviewView::render_not_repo_state(appearance, open_repo_button())
                     }

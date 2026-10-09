@@ -164,12 +164,12 @@ pub fn wire_up_remote_server_controller_with_view<T: EventLoopSender>(
         match event {
             view::Event::RemoteServerInstallRequested { session_id } => {
                 controller.update(ctx, |ctrl, ctx| {
-                    ctrl.handle_ssh_remote_server_install(*session_id, ctx);
+                    ctrl.handle_remote_server_install(*session_id, ctx);
                 });
             }
             view::Event::RemoteServerSkipRequested { session_id } => {
                 controller.update(ctx, |ctrl, ctx| {
-                    ctrl.handle_ssh_remote_server_skip(*session_id, ctx);
+                    ctrl.handle_remote_server_skip(*session_id, ctx);
                 });
             }
             _ => {}
@@ -207,6 +207,7 @@ pub fn init_pty_controller_model<Sender: EventLoopSender>(
 pub fn init_remote_server_controller<Sender: EventLoopSender>(
     pty_controller: &ModelHandle<PtyController<Sender>>,
     model_events: &ModelHandle<ModelEventDispatcher>,
+    sessions: &ModelHandle<Sessions>,
     ctx: &mut AppContext,
 ) -> ModelHandle<super::remote_server_controller::RemoteServerController<Sender>> {
     let pty_weak = pty_controller.downgrade();
@@ -214,6 +215,7 @@ pub fn init_remote_server_controller<Sender: EventLoopSender>(
         super::remote_server_controller::RemoteServerController::new(
             pty_weak,
             model_events.clone(),
+            sessions.clone(),
             ctx,
         )
     })

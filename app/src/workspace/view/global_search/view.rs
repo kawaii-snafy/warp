@@ -2073,9 +2073,6 @@ impl View for GlobalSearchView {
                     return self.render_remote_state(app);
                 }
             }
-            CodingPanelEnablementState::UnsupportedSession => {
-                return self.render_unsupported_session_state(app);
-            }
             CodingPanelEnablementState::Disabled => {
                 return self.render_unavailable_state(app);
             }
@@ -2351,15 +2348,6 @@ impl GlobalSearchView {
             Icon::Loading,
             "Connecting to remote session",
             "Global search will be available once the connection is ready.",
-            app,
-        )
-    }
-
-    fn render_unsupported_session_state(&self, app: &AppContext) -> Box<dyn Element> {
-        self.render_zero_state(
-            Icon::AlertTriangle,
-            "Global search unavailable",
-            "Global search doesn't currently work in Git Bash or WSL.",
             app,
         )
     }

@@ -882,6 +882,10 @@ pub enum FeatureFlag {
     /// Enables the code review view for remote sessions.
     RemoteCodeReview,
 
+    /// On Windows, runs the remote server inside each WSL session's distribution so the Project
+    /// Explorer, global search, and code review use the guest's native filesystem and git.
+    WslRemoteServer,
+
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
 

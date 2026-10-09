@@ -14,12 +14,14 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle
 use super::pty_controller::{EventLoopSender, PtyController};
 use crate::auth::auth_state::AuthStateProvider;
 use crate::remote_server::auth_context::server_api_auth_context;
+use crate::remote_server::is_wsl_remote_server_enabled;
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::remote_server::ssh_transport::SshTransport;
+use crate::remote_server::wsl_transport::WslTransport;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::PrivacySettings;
-use crate::terminal::model::session::{IsSSHWrapperSession, SessionInfo};
-use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::model::session::{IsSSHWrapperSession, SessionInfo, Sessions};
+use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
 use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
@@ -63,15 +65,51 @@ enum SshInitState {
     },
 }
 
+/// Progress of connecting a bootstrapped WSL session to a remote server inside its distribution.
+///
+/// Unlike [`SshInitState`], the shell bootstrap is never held back: until the server connects,
+/// the session keeps working as a local session over the `\\wsl$` host path.
+enum WslSetupState {
+    Idle,
+    AwaitingCheck {
+        session_id: SessionId,
+        transport: WslTransport,
+    },
+    AwaitingInstall {
+        session_id: SessionId,
+        transport: WslTransport,
+    },
+    /// `connect_session` was requested; the session stays registered with the manager until the
+    /// pane closes or the shell exits.
+    Connecting {
+        session_id: SessionId,
+    },
+}
+
+impl WslSetupState {
+    fn session_id(&self) -> Option<SessionId> {
+        match self {
+            Self::Idle => None,
+            Self::AwaitingCheck { session_id, .. }
+            | Self::AwaitingInstall { session_id, .. }
+            | Self::Connecting { session_id } => Some(*session_id),
+        }
+    }
+}
+
 /// Per-pane orchestrator that defers the bootstrap script write for SSH sessions,
 /// checks for the remote-server binary, and presents a two-option choice block when the binary is missing.
+///
+/// It also connects bootstrapped WSL sessions to a remote server inside their distribution.
 ///
 /// Uses a [`WeakModelHandle`] back to [`PtyController`] to avoid preventing
 /// `PtyController` from being deallocated.
 pub struct RemoteServerController<T: EventLoopSender> {
     pty_controller: WeakModelHandle<PtyController<T>>,
     model_event_dispatcher: ModelHandle<ModelEventDispatcher>,
+    sessions: ModelHandle<Sessions>,
     state: SshInitState,
+    wsl_state: WslSetupState,
     /// Whether the binary was installed during this setup flow.
     did_install: bool,
     /// Detected remote platform from the binary check phase, used for telemetry.
@@ -89,15 +127,27 @@ impl<T: EventLoopSender> RemoteServerController<T> {
     pub fn new(
         pty_controller: WeakModelHandle<PtyController<T>>,
         model_event_dispatcher: ModelHandle<ModelEventDispatcher>,
+        sessions: ModelHandle<Sessions>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&model_event_dispatcher, |me, _, event, ctx| {
-            if let ModelEvent::SshInitShell {
+        ctx.subscribe_to_model(&model_event_dispatcher, |me, _, event, ctx| match event {
+            ModelEvent::SshInitShell {
                 pending_session_info,
-            } = event
-            {
+            } => {
                 me.on_ssh_init_shell_requested(pending_session_info.as_ref().clone(), ctx);
             }
+            ModelEvent::Handler(AnsiHandlerEvent::Bootstrapped {
+                session_id,
+                is_subshell: false,
+            }) => {
+                me.on_session_bootstrapped(*session_id, ctx);
+            }
+            ModelEvent::ExitShell { session_id }
+                if me.wsl_state.session_id() == Some(*session_id) =>
+            {
+                me.disconnect_wsl_session(ctx);
+            }
+            _ => {}
         });
 
         let mgr = RemoteServerManager::handle(ctx);
@@ -109,6 +159,16 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                 preinstall_check,
                 has_old_binary,
             } => {
+                if me.wsl_state.session_id() == Some(*session_id) {
+                    me.on_wsl_binary_check_complete(
+                        *session_id,
+                        result.clone(),
+                        preinstall_check.as_ref(),
+                        *has_old_binary,
+                        ctx,
+                    );
+                    return;
+                }
                 me.remote_platform = remote_platform.clone();
                 me.preinstall_check = preinstall_check.clone();
                 me.on_binary_check_complete(
@@ -124,12 +184,24 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                 result,
                 install_source: _,
             } => {
+                if me.wsl_state.session_id() == Some(*session_id) {
+                    me.on_wsl_binary_install_complete(*session_id, result.clone(), ctx);
+                    return;
+                }
                 me.on_binary_install_complete(*session_id, result.clone(), ctx);
             }
             RemoteServerManagerEvent::SessionConnected { session_id, .. } => {
                 me.on_session_connected(*session_id, ctx);
             }
             RemoteServerManagerEvent::SessionConnectionFailed { session_id, .. } => {
+                if me.wsl_state.session_id() == Some(*session_id) {
+                    log::warn!(
+                        "WSL remote server connection failed: session={session_id:?}; code \
+                         features keep using the \\\\wsl$ host path"
+                    );
+                    me.wsl_state = WslSetupState::Idle;
+                    return;
+                }
                 me.on_session_connection_failed(*session_id, ctx);
             }
             RemoteServerManagerEvent::SessionConnecting { .. }
@@ -168,7 +240,9 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         Self {
             pty_controller,
             model_event_dispatcher,
+            sessions,
             state: SshInitState::Idle,
+            wsl_state: WslSetupState::Idle,
             did_install: false,
             remote_platform: None,
             preinstall_check: None,
@@ -352,7 +426,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         }
     }
 
-    pub fn handle_ssh_remote_server_install(
+    pub fn handle_remote_server_install(
         &mut self,
         session_id: SessionId,
         ctx: &mut ModelContext<Self>,
@@ -476,7 +550,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         self.flush_stashed_bootstrap(session_info, ctx);
     }
 
-    pub fn handle_ssh_remote_server_skip(
+    pub fn handle_remote_server_skip(
         &mut self,
         session_id: SessionId,
         ctx: &mut ModelContext<Self>,
@@ -538,6 +612,155 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                 );
                 self.flush_stashed_bootstrap(session_info, ctx);
             }
+        }
+    }
+
+    /// Idle -> WslSetupState::AwaitingCheck, for a top-level local WSL session on Windows.
+    fn on_session_bootstrapped(&mut self, session_id: SessionId, ctx: &mut ModelContext<Self>) {
+        if !is_wsl_remote_server_enabled()
+            || !self
+                .model_event_dispatcher
+                .as_ref(ctx)
+                .supports_remote_server()
+        {
+            return;
+        }
+        let Some(distro) = self
+            .sessions
+            .as_ref(ctx)
+            .get(session_id)
+            .filter(|session| session.is_local())
+            .and_then(|session| session.wsl_distro_name().map(str::to_owned))
+        else {
+            return;
+        };
+
+        // A pane runs one top-level shell at a time, so a new bootstrap replaces the old session.
+        self.disconnect_wsl_session(ctx);
+        let transport = WslTransport::new(distro, self.build_auth_context(ctx));
+        self.wsl_state = WslSetupState::AwaitingCheck {
+            session_id,
+            transport: transport.clone(),
+        };
+        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+            mgr.check_binary(session_id, transport, ctx);
+        });
+    }
+
+    fn on_wsl_binary_check_complete(
+        &mut self,
+        session_id: SessionId,
+        result: Result<bool, Arc<Error>>,
+        preinstall_check: Option<&PreinstallCheckResult>,
+        has_old_binary: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let WslSetupState::AwaitingCheck { transport, .. } =
+            std::mem::replace(&mut self.wsl_state, WslSetupState::Idle)
+        else {
+            return;
+        };
+        if let Some(PreinstallCheckResult {
+            status: PreinstallStatus::Unsupported { reason },
+            ..
+        }) = preinstall_check
+        {
+            log::info!(
+                "WSL distribution {} cannot run the remote server ({reason:?}); code features \
+                 keep using the \\\\wsl$ host path",
+                transport.distro()
+            );
+            return;
+        }
+
+        match result {
+            Ok(true) => self.connect_wsl_session(session_id, transport, ctx),
+            Ok(false) if has_old_binary => {
+                self.install_wsl_binary(session_id, transport, true, ctx);
+            }
+            // Like VS Code's Remote-WSL server, the install lands in the user's own distribution
+            // rather than a shared remote host, so it doesn't wait for consent unless the user
+            // opted out of installs entirely.
+            Ok(false) => match *WarpifySettings::as_ref(ctx)
+                .ssh_extension_install_mode
+                .value()
+            {
+                SshExtensionInstallMode::AlwaysAsk | SshExtensionInstallMode::AlwaysInstall => {
+                    self.install_wsl_binary(session_id, transport, false, ctx);
+                }
+                SshExtensionInstallMode::NeverInstall => {}
+            },
+            Err(err) => {
+                log::warn!(
+                    "WSL remote server binary check failed: session={session_id:?} error={err}"
+                );
+            }
+        }
+    }
+
+    fn install_wsl_binary(
+        &mut self,
+        session_id: SessionId,
+        transport: WslTransport,
+        is_update: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.wsl_state = WslSetupState::AwaitingInstall {
+            session_id,
+            transport: transport.clone(),
+        };
+        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+            mgr.install_binary(session_id, transport, is_update, ctx);
+        });
+    }
+
+    fn on_wsl_binary_install_complete(
+        &mut self,
+        session_id: SessionId,
+        result: Result<(), Arc<Error>>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let WslSetupState::AwaitingInstall { transport, .. } =
+            std::mem::replace(&mut self.wsl_state, WslSetupState::Idle)
+        else {
+            return;
+        };
+        match result {
+            Ok(()) => self.connect_wsl_session(session_id, transport, ctx),
+            Err(err) => {
+                log::warn!("WSL remote server install failed: session={session_id:?} error={err}");
+            }
+        }
+    }
+
+    fn connect_wsl_session(
+        &mut self,
+        session_id: SessionId,
+        transport: WslTransport,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let auth_context = self.build_auth_context(ctx);
+        let connection_label = format!("WSL: {}", transport.distro());
+        let transport = WslTransport::new(transport.distro().to_owned(), auth_context.clone());
+        self.wsl_state = WslSetupState::Connecting { session_id };
+        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+            mgr.connect_session(
+                session_id,
+                transport,
+                auth_context,
+                Some(connection_label),
+                ctx,
+            );
+        });
+    }
+
+    /// Releases this pane's WSL remote server session, if any, so the `wsl.exe` proxy exits.
+    pub fn disconnect_wsl_session(&mut self, ctx: &mut ModelContext<Self>) {
+        let previous = std::mem::replace(&mut self.wsl_state, WslSetupState::Idle);
+        if let WslSetupState::Connecting { session_id } = previous {
+            RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+                mgr.deregister_session(session_id, ctx);
+            });
         }
     }
 

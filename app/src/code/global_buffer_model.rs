@@ -335,7 +335,7 @@ impl GlobalBufferModel {
 
         // Subscribe to remote buffer updates from the RemoteServerManager.
         #[cfg(feature = "local_tty")]
-        if FeatureFlag::SshRemoteServer.is_enabled() {
+        if crate::remote_server::is_remote_server_enabled() {
             use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
             let mgr = RemoteServerManager::handle(_ctx);
             _ctx.subscribe_to_model(&mgr, |me, _, event, ctx| match event {
