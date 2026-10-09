@@ -136,16 +136,21 @@ pub(super) fn relaunch() -> Result<()> {
     // Set the -n option to open a new instance of the app even if one is
     // running so we still launch the new version even if the user was running
     // multiple instances of Warp.
-    let mut launch_command = OsString::from("/usr/bin/open -n ");
-    launch_command.push(bundle_path.as_os_str());
+    //
     // Pass a flag to the app to let it know it was restarted as part of the
     // autoupdate process.
-    launch_command.push(format!(" --args {}", warp_cli::finish_update_flag()));
+    let mut open_args: Vec<OsString> = vec![
+        "-n".into(),
+        bundle_path.into_os_string(),
+        "--args".into(),
+        warp_cli::finish_update_flag().into(),
+    ];
     // If we're testing with a local copy of channel_versions.json, have the
     // newly-started binary also reference that same file (so we can test
     // displaying an updated changelog after an autoupdate).
     if let Ok(path) = env::var("WARP_CHANNEL_VERSIONS_PATH") {
-        launch_command.push(format!(" --env WARP_CHANNEL_VERSIONS_PATH={path}"));
+        open_args.push("--env".into());
+        open_args.push(format!("WARP_CHANNEL_VERSIONS_PATH={path}").into());
     }
 
     // We need to make sure that the current Warp process is no longer running
@@ -156,16 +161,21 @@ pub(super) fn relaunch() -> Result<()> {
     //
     // Wait until the current process is no longer running, checking every
     // 200ms.  Once the current process has terminated, launch the new one.
+    //
+    // The values are passed as positional parameters rather than interpolated
+    // into the script so that paths containing spaces or shell metacharacters
+    // are not split or interpreted by the shell.
     let pid = std::process::id();
-    let mut relaunch_command = OsString::from(format!(
-        "while ps -p {pid} >/dev/null 2>&1; do sleep 0.2; done; "
-    ));
-    relaunch_command.push(launch_command);
+    let script =
+        r#"while ps -p "$1" >/dev/null 2>&1; do sleep 0.2; done; shift; exec /usr/bin/open "$@""#;
 
-    log::info!("Executing relaunch command {relaunch_command:?}");
+    log::info!("Executing relaunch command for pid {pid} with open args {open_args:?}");
     blocking::Command::new("sh")
         .arg("-c")
-        .arg(relaunch_command)
+        .arg(script)
+        .arg("sh")
+        .arg(pid.to_string())
+        .args(open_args)
         .spawn()?;
     Ok(())
 }

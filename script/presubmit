@@ -47,7 +47,7 @@ echo "Running ShellCheck..."
 echo "ShellCheck check completed..."
 
 # check to see if we can run powershell on the device
-if command -v pwsh /dev/null 2>&1; then
+if command -v pwsh >/dev/null 2>&1; then
     echo "Running PSScriptAnalyzer..."
     ./script/lint_powershell -ci
     echo "PsScriptAnalyzer succeeded..."
@@ -63,7 +63,7 @@ fi
 echo "Running tests via nextest..."
 cargo nextest run --no-fail-fast --workspace
 echo "Running doc tests..."
-cargo test --doc
+cargo test --doc --workspace
 echo "Tests succeeded..."
 
 echo "Congrats! All presubmits checks passed."

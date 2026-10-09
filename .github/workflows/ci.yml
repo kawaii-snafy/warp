@@ -24,11 +24,9 @@ env:
   CARGO_TERM_COLOR: always
   NEXTEST_PROFILE: ci
   WORKSPACE_TEST_ARGS: --workspace --locked
-  # Include only as much debug info as is necessary to see backtraces
-  # in test failures.  This should speed up compilation somewhat and
-  # reduces the size of built artifacts (which addresses issues with
-  # running out of space on GitHub-hosted runners).
-  RUSTFLAGS: -C debuginfo=line-tables-only --cfg=web_sys_unstable_apis
+  # Don't set RUSTFLAGS here: it would override the `target.*.rustflags` in
+  # `.cargo/config.toml`. Debuginfo is already limited to line tables by the
+  # Cargo profiles.
   # Ensure we open up real windows that render their contents via the GPU,
   # so that we can exercise the actual rendering logic.
   WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS: 1
@@ -52,8 +50,8 @@ jobs:
       (!startsWith(github.event.pull_request.head.ref, 'repo-sync/') || contains(github.event.pull_request.labels.*.name, 'repo-sync:conflict')) &&
       github.repository_owner == 'warpdotdev'
     outputs:
-      affects-database-schema: ${{ github.ref == 'master' || steps.filter.outputs.affects-database-schema }}
-      affects-rust-sources: ${{ github.ref == 'master' || steps.filter.outputs.affects-rust-sources }}
+      affects-database-schema: ${{ github.ref == 'refs/heads/master' || steps.filter.outputs.affects-database-schema }}
+      affects-rust-sources: ${{ github.ref == 'refs/heads/master' || steps.filter.outputs.affects-rust-sources }}
       macos-runner-lints: ${{ steps.mac_runner_type.outputs.lints }}
       macos-runner-release-check: ${{ steps.mac_runner_type.outputs.release-check }}
       macos-runner-tests: ${{ steps.mac_runner_type.outputs.tests }}
@@ -702,12 +700,11 @@ jobs:
       - name: Install cargo-binstall
         run: ./script/install_cargo_binstall
 
-      - name: Check licenses for dependencies
+      - name: Check dependencies with cargo-deny
         run: |
           cargo binstall --force -y cargo-deny
-          # Make sure all of our dependencies use licenses that are compatible with
-          # our usage.
-          cargo deny -L error check licenses
+          # Check licenses, security advisories, banned crates and dependency sources.
+          cargo deny -L error check
 
       - name: Check deny.toml / about.toml license sync
         run: ./script/check_license_config_sync

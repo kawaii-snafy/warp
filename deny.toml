@@ -10,6 +10,14 @@ ignore = [
     { id = "RUSTSEC-2020-0077", reason = "memmap is unmaintained; we should migrate to memmap2." },
     { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; this is a dependency of metal, which we should eliminate by moving to the objc2 family of crates."},
     { id = "RUSTSEC-2023-0081", reason = "safemem is unmaintained; this is a dependency of plist." },
+    { id = "RUSTSEC-2026-0183", reason = "git2 0.21 is a semver-breaking upgrade; we don't call Remote::list()." },
+    { id = "RUSTSEC-2026-0184", reason = "git2 0.21 is a semver-breaking upgrade; we don't create BlameHunks from buffers." },
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml comes in via plist and wayland-scanner, which have not moved to 0.41 yet." },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml comes in via plist and wayland-scanner, which have not moved to 0.41 yet." },
+    { id = "RUSTSEC-2026-0235", reason = "rkyv 0.7 is only used at build time by cynic-codegen on trusted schema data." },
+    { id = "RUSTSEC-2025-0119", reason = "number_prefix is unmaintained and has no safe upgrade; it is a transitive dependency." },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz is unmaintained; it is a dependency of cosmic-text and usvg." },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser is unmaintained; it is a dependency of cosmic-text, ab_glyph and usvg." },
 ]
 
 [licenses]
