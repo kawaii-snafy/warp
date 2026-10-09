@@ -62,8 +62,6 @@ pub enum SshRemoteServerChoiceViewEvent {
 /// Choice block prompting the user to install the remote-server binary on the remote host or skip.
 pub struct SshRemoteServerChoiceView {
     session_id: SessionId,
-    /// Whether the prompt is for a local WSL session rather than an SSH host.
-    is_wsl: bool,
     buttons: ViewHandle<KeyboardNavigableButtons>,
     do_not_ask_again_mouse_state: MouseStateHandle,
     do_not_ask_again_label_mouse_state: MouseStateHandle,
@@ -73,35 +71,27 @@ pub struct SshRemoteServerChoiceView {
 }
 
 impl SshRemoteServerChoiceView {
-    pub fn new(session_id: SessionId, is_wsl: bool, ctx: &mut ViewContext<Self>) -> Self {
-        let (install_title, install_description, skip_description) = if is_wsl {
-            (
-                "Install Warp's extension in WSL",
-                "Run Warp's extension inside the distribution so file browsing, code review, \
-                 and search use its native filesystem and git.",
-                "File browsing and code review will go through \\\\wsl$, which is slower and \
-                 doesn't refresh on file changes.",
-            )
-        } else {
-            (
-                "Install Warp's SSH extension",
-                "Install Warp's extension to enable agent features like file browsing, \
-                 code review, and intelligent command completions in this session.",
-                "You'll still get a Warpified experience just without the coding features.",
-            )
-        };
+    pub fn new(session_id: SessionId, ctx: &mut ViewContext<Self>) -> Self {
         let buttons = ctx.add_typed_action_view(|_| {
             KeyboardNavigableButtons::new(vec![
                 rich_navigation_button(
-                    install_title.to_string(),
-                    Some(install_description.to_string()),
+                    "Install Warp's SSH extension".to_string(),
+                    Some(
+                        "Install Warp's extension to enable agent features like file browsing, \
+                         code review, and intelligent command completions in this session."
+                            .to_string(),
+                    ),
                     /* recommended */ true,
                     MouseStateHandle::default(),
                     SshRemoteServerChoiceViewAction::Install,
                 ),
                 rich_navigation_button(
                     "Continue without installing".to_string(),
-                    Some(skip_description.to_string()),
+                    Some(
+                        "You'll still get a Warpified experience just without the coding \
+                         features."
+                            .to_string(),
+                    ),
                     /* recommended */ false,
                     MouseStateHandle::default(),
                     SshRemoteServerChoiceViewAction::Skip,
@@ -111,7 +101,6 @@ impl SshRemoteServerChoiceView {
 
         Self {
             session_id,
-            is_wsl,
             buttons,
             do_not_ask_again_mouse_state: MouseStateHandle::default(),
             do_not_ask_again_label_mouse_state: MouseStateHandle::default(),
@@ -132,12 +121,7 @@ impl SshRemoteServerChoiceView {
         // Match the Figma design: a plain title row, no icon / chevron /
         // action buttons. `HeaderConfig` without an `interaction_mode` set
         // renders exactly that.
-        let title = if self.is_wsl {
-            "Choose your experience for this WSL session:"
-        } else {
-            "Choose your experience for this remote session:"
-        };
-        HeaderConfig::new(title, app)
+        HeaderConfig::new("Choose your experience for this remote session:", app)
             .with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(
                 PROMPT_BORDER_RADIUS,
             )))

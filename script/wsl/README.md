@@ -10,9 +10,11 @@ the slow `\\wsl$` share that Windows can't watch for changes.
 1. When a WSL session finishes bootstrapping, Warp runs
    `wsl.exe --distribution <distro> --exec /bin/sh -c '<binary> --version'` to check for the
    server binary.
-2. If the binary is missing, Warp follows **Settings → Warpify → Install SSH extension**
-   (ask, always install, or never install). Installing downloads the Linux build inside the
-   distribution, or falls back to downloading it on Windows and streaming it in.
+2. If the binary is missing, Warp installs it without asking, like VS Code installs its WSL
+   server, unless **Settings → Warpify → Install SSH extension** is set to never install. It
+   downloads the Linux build on Windows, where the tarball is cached for every distribution,
+   and streams it into the distribution; if Windows can't download it, the distribution
+   downloads it itself.
 3. Warp starts `<binary> remote-server-proxy` through `wsl.exe` and talks to it over stdio. The
    proxy starts a daemon that stays up for 10 minutes after the last connection closes.
 4. The shell itself never waits for the server. Until the server connects, or if it can't start,
@@ -20,9 +22,11 @@ the slow `\\wsl$` share that Windows can't watch for changes.
 
 ## Installing the server for a source build
 
-The release CDN has no server artifact for builds of this repository (the `oss` channel). Build
-and install one from inside the distribution you use with Warp, from a checkout of the same
-revision as your Windows build:
+Builds of this repository (the `oss` channel) have no server artifact of their own. They install
+Warp's dev build of the server, or its public stable build when the dev one can't be downloaded,
+and accept whatever version they get. That server can lag behind or run ahead of your checkout,
+and it isn't updated once installed. For a server built from the same revision as your Windows
+build, build and install it from inside the distribution you use with Warp:
 
 ```bash
 ./script/linux/install_build_deps   # once, if the distribution can't build Warp yet

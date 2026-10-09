@@ -75,11 +75,6 @@ enum WslSetupState {
         session_id: SessionId,
         transport: WslTransport,
     },
-    /// Choice block showing.
-    AwaitingUserChoice {
-        session_id: SessionId,
-        transport: WslTransport,
-    },
     AwaitingInstall {
         session_id: SessionId,
         transport: WslTransport,
@@ -96,7 +91,6 @@ impl WslSetupState {
         match self {
             Self::Idle => None,
             Self::AwaitingCheck { session_id, .. }
-            | Self::AwaitingUserChoice { session_id, .. }
             | Self::AwaitingInstall { session_id, .. }
             | Self::Connecting { session_id } => Some(*session_id),
         }
@@ -437,21 +431,6 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         session_id: SessionId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let WslSetupState::AwaitingUserChoice {
-            session_id: expected,
-            ..
-        } = &self.wsl_state
-            && *expected == session_id
-        {
-            let WslSetupState::AwaitingUserChoice { transport, .. } =
-                std::mem::replace(&mut self.wsl_state, WslSetupState::Idle)
-            else {
-                unreachable!("just matched AwaitingUserChoice above");
-            };
-            self.install_wsl_binary(session_id, transport, false, ctx);
-            return;
-        }
-
         let SshInitState::AwaitingUserChoice { .. } = self.state else {
             log::warn!(
                 "Remote server install requested in unexpected state: session={session_id:?}"
@@ -576,16 +555,6 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         session_id: SessionId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let WslSetupState::AwaitingUserChoice {
-            session_id: expected,
-            ..
-        } = &self.wsl_state
-            && *expected == session_id
-        {
-            self.wsl_state = WslSetupState::Idle;
-            return;
-        }
-
         let SshInitState::AwaitingUserChoice { session_info, .. } =
             std::mem::replace(&mut self.state, SshInitState::Idle)
         else {
@@ -709,20 +678,14 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             Ok(false) if has_old_binary => {
                 self.install_wsl_binary(session_id, transport, true, ctx);
             }
+            // Like VS Code's Remote-WSL server, the install lands in the user's own distribution
+            // rather than a shared remote host, so it doesn't wait for consent unless the user
+            // opted out of installs entirely.
             Ok(false) => match *WarpifySettings::as_ref(ctx)
                 .ssh_extension_install_mode
                 .value()
             {
-                SshExtensionInstallMode::AlwaysAsk => {
-                    self.wsl_state = WslSetupState::AwaitingUserChoice {
-                        session_id,
-                        transport,
-                    };
-                    self.model_event_dispatcher.update(ctx, |d, ctx| {
-                        d.request_remote_server_block(session_id, ctx);
-                    });
-                }
-                SshExtensionInstallMode::AlwaysInstall => {
+                SshExtensionInstallMode::AlwaysAsk | SshExtensionInstallMode::AlwaysInstall => {
                     self.install_wsl_binary(session_id, transport, false, ctx);
                 }
                 SshExtensionInstallMode::NeverInstall => {}

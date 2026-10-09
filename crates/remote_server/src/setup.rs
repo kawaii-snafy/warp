@@ -576,6 +576,15 @@ const INSTALL_SCRIPT_TEMPLATE: &str = include_str!("install_remote_server.sh");
 /// `&version={v}` / `-{v}` on every other channel, where `v` falls back
 /// to `CARGO_PKG_VERSION` when no release tag is baked in.
 pub fn install_script(staging_tarball_path: Option<&str>) -> String {
+    install_script_from_channel(staging_tarball_path, download_channel())
+}
+
+/// Like [`install_script`], but downloads the artifact published on `download_channel`, one of
+/// [`download_channels`].
+pub fn install_script_from_channel(
+    staging_tarball_path: Option<&str>,
+    download_channel: &str,
+) -> String {
     let (vq, version_suffix) = match ChannelState::channel() {
         Channel::Local | Channel::Oss => (String::new(), String::new()),
         Channel::Stable | Channel::Preview | Channel::Dev | Channel::Integration => {
@@ -585,7 +594,7 @@ pub fn install_script(staging_tarball_path: Option<&str>) -> String {
     };
     INSTALL_SCRIPT_TEMPLATE
         .replace("{download_base_url}", &download_url())
-        .replace("{channel}", download_channel())
+        .replace("{channel}", download_channel)
         .replace("{install_dir}", &remote_server_dir())
         .replace("{binary_name}", binary_name())
         .replace("{version_query}", &vq)
@@ -612,16 +621,24 @@ fn download_url() -> String {
 ///
 /// The server recognises `"stable"`, `"preview"`, and `"dev"`.  Local and
 /// Integration builds map to `"dev"` so they fetch dogfood artifacts.
-fn download_channel() -> &'static str {
+pub fn download_channel() -> &'static str {
+    download_channels()[0]
+}
+
+/// Returns the download channel parameters to try, in order, when installing the remote server.
+/// The first entry is the channel matching the client.
+///
+/// `warp-oss` builds have no artifact of their own and run whatever server they get (an
+/// unversioned client accepts any server version), so they fall back to the publicly available
+/// stable artifact when the dev artifact can't be downloaded.
+pub fn download_channels() -> &'static [&'static str] {
     match ChannelState::channel() {
-        Channel::Stable => "stable",
-        Channel::Preview => "preview",
-        Channel::Dev | Channel::Local | Channel::Integration => "dev",
-        Channel::Oss => {
-            // TODO(alokedesai): need to figure out how remote server works with warp-oss
-            // For now, return what Dev returns.
-            "dev"
-        }
+        Channel::Stable => &["stable"],
+        Channel::Preview => &["preview"],
+        Channel::Dev | Channel::Local | Channel::Integration => &["dev"],
+        // TODO(alokedesai): need to figure out how remote server works with warp-oss
+        // For now, try what Dev uses first.
+        Channel::Oss => &["dev", "stable"],
     }
 }
 
@@ -640,12 +657,21 @@ fn version_query() -> String {
 /// parameterized by the remote platform. Used by the SCP upload
 /// fallback to download the same artifact the shell script would fetch.
 pub fn download_tarball_url(platform: &RemotePlatform) -> String {
+    download_tarball_url_from_channel(platform, download_channel())
+}
+
+/// Like [`download_tarball_url`], but for the artifact published on `download_channel`, one of
+/// [`download_channels`].
+pub fn download_tarball_url_from_channel(
+    platform: &RemotePlatform,
+    download_channel: &str,
+) -> String {
     format!(
         "{}?package=tar&os={}&arch={}&channel={}{}",
         download_url(),
         platform.os.as_str(),
         platform.arch.as_str(),
-        download_channel(),
+        download_channel,
         version_query(),
     )
 }

@@ -13598,13 +13598,8 @@ impl TerminalView {
             return;
         }
 
-        let is_wsl = self
-            .sessions
-            .as_ref(ctx)
-            .get(session_id)
-            .is_some_and(|session| session.is_wsl());
-        let choice_view = ctx
-            .add_typed_action_view(|ctx| SshRemoteServerChoiceView::new(session_id, is_wsl, ctx));
+        let choice_view =
+            ctx.add_typed_action_view(|ctx| SshRemoteServerChoiceView::new(session_id, ctx));
 
         ctx.subscribe_to_view(&choice_view, move |me, _, event, ctx| match event {
             SshRemoteServerChoiceViewEvent::Install => {

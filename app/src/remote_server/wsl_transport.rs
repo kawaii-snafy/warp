@@ -6,6 +6,7 @@
 //! the protocol channel.
 use std::fmt;
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::process::{Output, Stdio};
 use std::sync::Arc;
@@ -28,9 +29,9 @@ use super::ssh_transport::installation::scp_fallback;
 /// The program used to enter a WSL distribution from the Windows host.
 const WSL_PROGRAM: &str = "wsl";
 
-/// Exit code of the install script when the failure is on the guest itself (e.g. no writable
-/// install directory), so a client-side download would not help either.
-const INSTALL_SCRIPT_GUEST_FAILURE_EXIT_CODE: i32 = 2;
+/// Exit code of the install script when the guest's OS or architecture is unsupported, which no
+/// other download source can fix.
+const INSTALL_SCRIPT_UNSUPPORTED_PLATFORM_EXIT_CODE: i32 = 2;
 
 /// WSL transport: runs the remote server inside the WSL distribution `distro`.
 #[derive(Clone)]
@@ -176,45 +177,32 @@ async fn detect_wsl_platform(distro: &str) -> Result<RemotePlatform, Error> {
     }
 }
 
-/// Installs the binary by letting the distribution download it, falling back to downloading the
-/// tarball on the Windows host and streaming it into the distribution when the guest download
-/// fails (e.g. WSL's DNS or proxy configuration differs from the host's).
+/// Installs the binary the way VS Code installs its WSL server: download the tarball on the
+/// Windows host, where it is cached across distributions and sessions, and stream it into the
+/// distribution, falling back to downloading inside the distribution when the host can't fetch
+/// it. Each of [`remote_server::setup::download_channels`] is tried in turn.
 async fn install_wsl_binary(distro: &str) -> InstallOutcome {
     let binary_path = remote_server::setup::remote_server_binary();
     log::info!("Installing remote server binary to {binary_path} in WSL distribution {distro}");
 
-    let guest_install = run_wsl_script(
-        distro,
-        &remote_server::setup::install_script(None),
-        remote_server::setup::INSTALL_TIMEOUT,
-    )
-    .await
-    .and_then(ensure_success);
-
-    let mut outcome = match guest_install {
-        Ok(()) => InstallOutcome {
-            source: Some(InstallSource::Server),
-            result: Ok(()),
-        },
-        Err(Error::ScriptFailed { exit_code, stderr })
-            if exit_code == INSTALL_SCRIPT_GUEST_FAILURE_EXIT_CODE =>
-        {
-            InstallOutcome {
-                source: Some(InstallSource::Server),
-                result: Err(Error::ScriptFailed { exit_code, stderr }),
-            }
-        }
-        Err(guest_err) => {
-            log::info!(
-                "Remote server install inside WSL failed ({guest_err}); \
-                 falling back to a host-side download"
-            );
-            InstallOutcome {
-                source: Some(InstallSource::Client),
-                result: install_from_host_tarball(distro).await,
-            }
-        }
+    let mut outcome = InstallOutcome {
+        source: None,
+        result: Err(Error::Other(anyhow!("no remote server download channel"))),
     };
+    for &download_channel in remote_server::setup::download_channels() {
+        outcome = install_from_channel(distro, download_channel).await;
+        match &outcome.result {
+            Ok(()) => break,
+            Err(Error::ScriptFailed { exit_code, .. })
+                if *exit_code == INSTALL_SCRIPT_UNSUPPORTED_PLATFORM_EXIT_CODE =>
+            {
+                break;
+            }
+            Err(err) => log::info!(
+                "Installing the remote server from the {download_channel} channel failed: {err}"
+            ),
+        }
+    }
 
     if outcome.result.is_ok() {
         let verify = run_wsl_command(
@@ -234,33 +222,97 @@ async fn install_wsl_binary(distro: &str) -> InstallOutcome {
     outcome
 }
 
-async fn install_from_host_tarball(distro: &str) -> Result<(), Error> {
+async fn install_from_channel(distro: &str, download_channel: &str) -> InstallOutcome {
+    match install_from_host_tarball(distro, download_channel).await {
+        Ok(()) => InstallOutcome {
+            source: Some(InstallSource::Client),
+            result: Ok(()),
+        },
+        Err(err @ Error::ScriptFailed { exit_code, .. })
+            if exit_code == INSTALL_SCRIPT_UNSUPPORTED_PLATFORM_EXIT_CODE =>
+        {
+            InstallOutcome {
+                source: Some(InstallSource::Client),
+                result: Err(err),
+            }
+        }
+        Err(host_err) => {
+            log::info!(
+                "Host-side remote server download failed ({host_err}); downloading inside WSL"
+            );
+            let result = run_wsl_script(
+                distro,
+                &remote_server::setup::install_script_from_channel(None, download_channel),
+                remote_server::setup::INSTALL_TIMEOUT,
+            )
+            .await
+            .and_then(ensure_success);
+            InstallOutcome {
+                source: Some(InstallSource::Server),
+                result,
+            }
+        }
+    }
+}
+
+async fn install_from_host_tarball(distro: &str, download_channel: &str) -> Result<(), Error> {
     let platform = detect_wsl_platform(distro).await?;
-    let tarball_path = scp_fallback::cached_remote_server_tarball(&platform)
+    let tarball_path = scp_fallback::cached_remote_server_tarball(&platform, download_channel)
         .await
         .map_err(Error::Other)?;
-    let tarball = async_fs::read(&tarball_path)
-        .await
-        .map_err(|err| Error::Other(anyhow!("Failed to read cached tarball: {err}")))?;
 
     let install_dir = remote_server::setup::remote_server_dir();
     let staged_tarball_path = format!("{install_dir}/oz-upload-{}.tar.gz", uuid::Uuid::new_v4());
     let upload_command = format!("mkdir -p {install_dir} && cat > {staged_tarball_path}");
-    run_wsl_with_stdin(
+    upload_file_to_wsl(
         &wsl_shell_command_args(distro, &upload_command),
-        &tarball,
+        &tarball_path,
         remote_server::setup::SCP_INSTALL_TIMEOUT,
     )
-    .await
-    .and_then(ensure_success)?;
+    .await?;
 
     run_wsl_script(
         distro,
-        &remote_server::setup::install_script(Some(&staged_tarball_path)),
+        &remote_server::setup::install_script_from_channel(
+            Some(&staged_tarball_path),
+            download_channel,
+        ),
         remote_server::setup::SCP_INSTALL_TIMEOUT,
     )
     .await
     .and_then(ensure_success)
+}
+
+/// Streams the host file at `path` into the stdin of `args` run through `wsl.exe`.
+async fn upload_file_to_wsl(args: &[String], path: &Path, timeout: Duration) -> Result<(), Error> {
+    async {
+        let mut file = async_fs::File::open(path)
+            .await
+            .map_err(|err| Error::Other(anyhow!("Failed to open cached tarball: {err}")))?;
+        let mut child = command::r#async::Command::new(WSL_PROGRAM)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|err| Error::Other(anyhow!("Failed to spawn wsl.exe: {err}")))?;
+        if let Some(mut child_stdin) = child.stdin.take() {
+            futures::io::copy(&mut file, &mut child_stdin)
+                .await
+                .map_err(|err| Error::Other(anyhow!("Failed to stream the tarball: {err}")))?;
+            // Closing stdin lets `cat` see EOF and exit.
+            drop(child_stdin);
+        }
+        let output = child
+            .output()
+            .await
+            .map_err(|err| Error::Other(anyhow!("wsl.exe I/O error: {err}")))?;
+        ensure_success(output)
+    }
+    .with_timeout(timeout)
+    .await
+    .map_err(|_| Error::TimedOut)?
 }
 
 impl RemoteTransport for WslTransport {

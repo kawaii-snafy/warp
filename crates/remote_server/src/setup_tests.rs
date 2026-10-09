@@ -289,6 +289,27 @@ fn install_script_substitutes_bundled_resources_dir_name() {
     assert!(script.contains(&format!("$install_dir/{BUNDLED_RESOURCES_DIR_NAME}")));
 }
 
+#[test]
+fn download_channels_start_with_the_client_channel() {
+    let channels = download_channels();
+    assert!(!channels.is_empty());
+    assert_eq!(channels[0], download_channel());
+    assert!(install_script(None).contains(&format!("&channel={}", download_channel())));
+}
+
+#[test]
+fn install_script_from_channel_downloads_that_channel() {
+    let script = install_script_from_channel(None, "stable");
+    assert!(script.contains("&channel=stable"));
+    assert!(!script.contains("{channel}"));
+
+    let platform = RemotePlatform {
+        os: RemoteOs::Linux,
+        arch: RemoteArch::X86_64,
+    };
+    assert!(download_tarball_url_from_channel(&platform, "stable").contains("&channel=stable"));
+}
+
 #[cfg(unix)]
 fn make_test_tarball(
     test_root: &std::path::Path,
