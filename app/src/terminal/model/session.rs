@@ -175,7 +175,7 @@ impl Sessions {
         // (see `new_command_executor_for_local_tty_session`) so we no
         // longer need to wire it here on connect/disconnect.
         #[cfg(feature = "local_tty")]
-        if FeatureFlag::SshRemoteServer.is_enabled() {
+        if crate::remote_server::is_remote_server_enabled() {
             let mgr = RemoteServerManager::handle(ctx);
             ctx.subscribe_to_model(&mgr, |sessions, _, event, ctx| match event {
                 RemoteServerManagerEvent::SessionConnected {
@@ -235,7 +235,13 @@ impl Sessions {
                     client,
                     ..
                 } => {
-                    if let Some(session) = sessions.sessions.get(sid) {
+                    // Local WSL sessions keep running commands through `wsl.exe`; only remote
+                    // sessions execute through the server.
+                    if let Some(session) = sessions
+                        .sessions
+                        .get(sid)
+                        .filter(|session| !session.is_local())
+                    {
                         let new_executor =
                             Arc::new(RemoteServerCommandExecutor::new(*sid, client.clone()));
                         session.set_command_executor(new_executor);
@@ -954,6 +960,10 @@ pub struct Session {
     /// when `RemoteServerManager` reports a connected session (to fill in the
     /// `host_id`). Interior mutability allows updating through `Arc<Session>`.
     session_type: Mutex<SessionType>,
+    /// The host of the remote server running inside this local WSL session's distribution, set
+    /// once `RemoteServerManager` reports the connection. Code features use it instead of the
+    /// `\\wsl$` host path while it is set.
+    wsl_remote_host_id: Mutex<Option<warp_core::HostId>>,
 }
 
 impl Session {
@@ -980,6 +990,7 @@ impl Session {
             load_all_builtins_future: Default::default(),
             command_case_sensitivity,
             session_type: Mutex::new(session_type),
+            wsl_remote_host_id: Mutex::new(None),
         }
     }
 
@@ -999,13 +1010,25 @@ impl Session {
         self.session_type.lock().clone()
     }
 
-    /// Updates the `host_id` on a `WarpifiedRemote` session type after the
-    /// remote server handshake completes (or clears it on disconnect).
+    /// Updates the remote server `host_id` after the handshake completes (or clears it on
+    /// disconnect): on the `WarpifiedRemote` session type, or for a local WSL session, on
+    /// [`Self::wsl_remote_host_id`].
     pub fn set_remote_host_id(&self, host_id: Option<warp_core::HostId>) {
         let mut st = self.session_type.lock();
-        if let SessionType::WarpifiedRemote { host_id: ref mut h } = *st {
-            *h = host_id;
+        match *st {
+            SessionType::WarpifiedRemote { host_id: ref mut h } => *h = host_id,
+            SessionType::Local => {
+                if self.is_wsl() {
+                    *self.wsl_remote_host_id.lock() = host_id;
+                }
+            }
         }
+    }
+
+    /// Returns the host of the remote server running inside this local WSL session's
+    /// distribution, if it is connected.
+    pub fn wsl_remote_host_id(&self) -> Option<warp_core::HostId> {
+        self.wsl_remote_host_id.lock().clone()
     }
 
     pub fn shell_family(&self) -> ShellFamily {
@@ -1883,6 +1906,7 @@ pub mod testing {
                 load_external_commands_future: Default::default(),
                 command_case_sensitivity: TopLevelCommandCaseSensitivity::CaseSensitive,
                 session_type: Mutex::new(session_type),
+                wsl_remote_host_id: Default::default(),
                 additional_function_names: Default::default(),
                 load_all_function_names_future: Default::default(),
                 additional_builtin_names: Default::default(),
@@ -1902,6 +1926,7 @@ pub mod testing {
                 load_external_commands_future: Default::default(),
                 command_case_sensitivity: TopLevelCommandCaseSensitivity::CaseSensitive,
                 session_type: Mutex::new(session_type),
+                wsl_remote_host_id: Default::default(),
                 additional_function_names: Default::default(),
                 load_all_function_names_future: Default::default(),
                 additional_builtin_names: Default::default(),

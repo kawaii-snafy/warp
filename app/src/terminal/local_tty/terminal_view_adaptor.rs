@@ -2260,6 +2260,15 @@ impl TerminalManagerTrait for TerminalManager<TerminalView> {
                 app,
             )
         }
+
+        // A closed pane's shell may never report `ExitShell`, and the `wsl.exe` proxy outlives
+        // the pane's PTY, so release the WSL remote server session explicitly.
+        if matches!(detach_type, crate::pane_group::pane::DetachType::Closed) {
+            self.remote_server_controller()
+                .update(app, |controller, ctx| {
+                    controller.disconnect_wsl_session(ctx);
+                });
+        }
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+#
+# Builds the Warp remote server natively inside a WSL distribution and installs
+# it where the Windows Warp client looks for it, so WSL sessions get the Project
+# Explorer, global search, and code review through the guest's own filesystem
+# and git.
+#
+# Run this from inside the WSL distribution you use with Warp, in a checkout of
+# the same revision as the Windows client. It is needed for channels without a
+# downloadable remote-server artifact (OSS builds of this repository) or to test
+# local changes to the server.
+#
+# Prerequisites: the Linux build dependencies (`./script/linux/install_build_deps`)
+# and a Rust toolchain inside the distribution.
+#
+# Usage:
+#   script/wsl/deploy_remote_server [--channel oss|local] [--profile release|dev]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+CHANNEL="oss"
+PROFILE="release"
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Build the Warp remote server inside WSL and install it for the Windows client.
+
+Options:
+  --channel <channel>   Channel of the Windows client: oss (default; builds of this
+                        repository without internal channel config) or local
+  --profile <profile>   Cargo profile: release (default) or dev
+  --help                Show this help message
+EOF
+  exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --channel)
+      CHANNEL="$2"
+      shift 2
+      ;;
+    --profile)
+      PROFILE="$2"
+      shift 2
+      ;;
+    --help)
+      usage
+      ;;
+    *)
+      echo "Error: Unknown argument: $1" >&2
+      echo "Run with --help for usage." >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ ! -e /proc/sys/fs/binfmt_misc/WSLInterop && -z "${WSL_DISTRO_NAME:-}" ]]; then
+  echo "Error: run this script inside the WSL distribution you use with Warp." >&2
+  exit 1
+fi
+
+# These must match `remote_server_dir`, `binary_name` and `remote_server_binary` in
+# crates/remote_server/src/setup.rs. Only the unversioned channels are supported; the
+# others install a release-pinned binary from the CDN.
+case "$CHANNEL" in
+  oss)
+    WARP_BIN="warp-oss"
+    BINARY_NAME="warp-oss"
+    INSTALL_DIR="$HOME/.warp-dev/remote-server"
+    FEATURES="release_bundle,standalone,remote_codebase_indexing"
+    ;;
+  local)
+    WARP_BIN="warp"
+    BINARY_NAME="oz-local"
+    INSTALL_DIR="$HOME/.warp-local/remote-server"
+    FEATURES="release_bundle,standalone,agent_mode_debug,remote_codebase_indexing"
+    ;;
+  *)
+    echo "Error: Unsupported channel '$CHANNEL'. Use 'oss' or 'local'." >&2
+    exit 1
+    ;;
+esac
+
+case "$PROFILE" in
+  release)
+    PROFILE_DIR="release"
+    ;;
+  dev)
+    PROFILE_DIR="debug"
+    ;;
+  *)
+    echo "Error: Unsupported profile '$PROFILE'. Use 'release' or 'dev'." >&2
+    exit 1
+    ;;
+esac
+
+# Keep build artifacts on the Linux filesystem: a checkout under /mnt/<drive> is shared
+# with the Windows build's `target/` and is far slower to build on.
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/warp-wsl-remote-server/target}"
+OUTPUT_DIR="$CARGO_TARGET_DIR/$PROFILE_DIR"
+BUILT_BINARY="$OUTPUT_DIR/$WARP_BIN"
+LOCAL_RESOURCES_DIR="$OUTPUT_DIR/remote-server-resources"
+# Must match BUNDLED_RESOURCES_DIR_NAME in crates/remote_server/src/setup.rs.
+BUNDLED_RESOURCES_DIR="$INSTALL_DIR/bundled_resources"
+
+echo "==> Building $WARP_BIN (channel=$CHANNEL, profile=$PROFILE)"
+echo "    Features: $FEATURES"
+echo "    Target dir: $CARGO_TARGET_DIR"
+(
+  cd "$WORKSPACE_ROOT"
+  cargo build -p warp --bin "$WARP_BIN" --profile "$PROFILE" --features "$FEATURES"
+)
+
+if [[ ! -f "$BUILT_BINARY" ]]; then
+  echo "Error: Expected binary not found at $BUILT_BINARY" >&2
+  exit 1
+fi
+
+echo "==> Installing $INSTALL_DIR/$BINARY_NAME"
+mkdir -p "$INSTALL_DIR"
+# Copy to a temporary name and rename so a running daemon keeps its executable intact.
+cp "$BUILT_BINARY" "$INSTALL_DIR/.$BINARY_NAME.tmp"
+chmod 755 "$INSTALL_DIR/.$BINARY_NAME.tmp"
+mv -f "$INSTALL_DIR/.$BINARY_NAME.tmp" "$INSTALL_DIR/$BINARY_NAME"
+
+echo "==> Installing bundled resources to $BUNDLED_RESOURCES_DIR"
+rm -rf "$LOCAL_RESOURCES_DIR"
+# The daemon doesn't read the license attribution, so skip generating it (it needs cargo-about).
+NO_LICENSES=1 SKIP_SETTINGS_SCHEMA=1 "$WORKSPACE_ROOT/script/prepare_bundled_resources" \
+  "$LOCAL_RESOURCES_DIR" \
+  "$CHANNEL"
+mkdir -p "$BUNDLED_RESOURCES_DIR"
+cp -R "$LOCAL_RESOURCES_DIR/." "$BUNDLED_RESOURCES_DIR/"
+"$INSTALL_DIR/$BINARY_NAME" dump-settings-schema "$BUNDLED_RESOURCES_DIR/settings_schema.json"
+
+echo "==> Stopping stale remote-server daemons"
+shopt -s nullglob
+for pid_file in "$INSTALL_DIR"/*/server*.pid; do
+  daemon_dir="$(dirname "$pid_file")"
+  socket_file="${pid_file%.pid}.sock"
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]] &&
+    tr '\0' ' ' <"/proc/$pid/cmdline" | grep -q remote-server-daemon; then
+    echo "    Stopping daemon pid=$pid dir=$daemon_dir"
+    kill "$pid" 2>/dev/null || true
+    for _ in {1..50}; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  rm -f "$socket_file" "$pid_file"
+done
+
+echo ""
+echo "==> Done. Open a new WSL tab in Warp to connect to $INSTALL_DIR/$BINARY_NAME."

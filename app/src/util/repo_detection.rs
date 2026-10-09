@@ -26,8 +26,9 @@ use crate::remote_server::manager::RemoteServerManager;
 pub enum RepoDetectionSessionType {
     /// A local terminal session — repo detection runs on the local filesystem.
     Local,
-    /// A remote SSH session — repo detection is delegated to the remote server
-    /// via `navigate_to_directory`.
+    /// A session backed by a remote server (an SSH host, or the server inside a
+    /// WSL distribution) — repo detection is delegated to the remote server via
+    /// `navigate_to_directory`.
     Remote { session_id: SessionId },
 }
 

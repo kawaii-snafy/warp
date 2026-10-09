@@ -695,6 +695,7 @@ default = [
     "gemini_enterprise",
     "billing_and_usage_page_v2",
     "remote_code_review",
+    "wsl_remote_server",
     "git_operations_in_code_review",
     "terminal_lifecycle_recovery",
     "cloud_runners",
@@ -928,6 +929,7 @@ undo_closed_panes = []
 revert_diff_hunk = []
 code_review_save_changes = []
 remote_code_review = []
+wsl_remote_server = []
 file_tree = []
 code_launch_modal = []
 api_key_management = []

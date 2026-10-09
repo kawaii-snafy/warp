@@ -314,6 +314,7 @@ use crate::prompt::editor_modal::{
 };
 use crate::quit_warning::UnsavedStateSummary;
 use crate::referral_theme_status::ReferralThemeEvent;
+use crate::remote_server::is_remote_server_enabled;
 use crate::remote_server::manager::RemoteServerManager;
 use crate::resource_center::{
     ResourceCenterEvent, ResourceCenterPage, ResourceCenterView, Tip, TipAction, TipsCompleted,
@@ -17742,6 +17743,11 @@ impl Workspace {
                         )
                     });
 
+                // A local WSL session whose distribution runs a remote server is served like a
+                // remote session.
+                let is_remote = matches!(is_local, Some(false))
+                    || matches!(pwd_location, Some(LocalOrRemotePath::Remote(_)));
+
                 let window_id = ctx.window_id();
                 let working_directory_clone = path_if_local.clone();
                 ActiveSession::handle(ctx).update(ctx, |active_session, ctx| {
@@ -17760,14 +17766,13 @@ impl Workspace {
                     }
                 });
 
-                let is_remote = matches!(is_local, Some(false));
-
                 // Check whether this remote session has an active remote server
                 // connection (or is in the process of connecting). This is only
                 // true for Auto SSH Warpification (mode 1) sessions where
-                // `connect_session` was called at `InitShell` time.
+                // `connect_session` was called at `InitShell` time, and for WSL
+                // sessions connected to the server inside their distribution.
                 let has_remote_server = is_remote
-                    && FeatureFlag::SshRemoteServer.is_enabled()
+                    && is_remote_server_enabled()
                     && session_id.is_some_and(|sid| {
                         RemoteServerManager::as_ref(ctx).is_session_potentially_active(sid)
                     });

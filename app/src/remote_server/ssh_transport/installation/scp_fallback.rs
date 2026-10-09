@@ -123,7 +123,9 @@ async fn is_valid_cached_tarball(path: &Path) -> bool {
 ///
 /// Reuses an existing cached tarball when available; otherwise downloads the
 /// tarball into the cache and returns the newly cached path.
-async fn cached_remote_server_tarball(platform: &RemotePlatform) -> anyhow::Result<PathBuf> {
+pub(crate) async fn cached_remote_server_tarball(
+    platform: &RemotePlatform,
+) -> anyhow::Result<PathBuf> {
     let cache_path = remote_server_tarball_cache_path(platform);
     if is_valid_cached_tarball(&cache_path).await {
         log::info!(
